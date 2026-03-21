@@ -1,0 +1,249 @@
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called
+% camera-ready) version.
+\usepackage[final]{acl}
+
+% Standard package includes
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin
+% characters (including in bib files)
+\usepackage[T1]{fontenc}
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+% This is also not strictly necessary, and may be commented out.
+% However, it will improve the aesthetics of text in
+% the typewriter font.
+\usepackage{inconsolata}
+
+% Additional packages for our paper
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{url}
+
+% Title
+\title{Domain-Specific Hallucination Detection in Large Language Models: Project Update 1}
+
+% Author information
+\author{Varun Chundru \and Debasmita Biswas \\
+  Department of Computer Science \\
+  Purdue University Fort Wayne \\
+  \texttt{\{vchundru, biswd01\}@pfw.edu}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Large Language Models (LLMs) frequently generate hallucinations---fluent but factually incorrect outputs---which pose significant risks in high-stakes domains such as healthcare and scientific research. This project develops a hallucination detection framework that combines Natural Language Inference (NLI) with domain-specific fine-tuning. In this update, we present our baseline implementations: (1) a zero-shot NLI detector using DeBERTa-MNLI achieving F1=0.43, and (2) a fine-tuned DeBERTa model achieving F1=0.91 on the HaluEval benchmark. We analyze performance across QA, dialogue, and summarization tasks, identifying key challenges for domain-specific detection. Code is available at: \url{https://github.com/varunteja99/hallucination-detection-nlp}.
+\end{abstract}
+
+% ============================================================================
+\section{Related Work}
+% ============================================================================
+
+\subsection{Hallucination in LLMs}
+
+Hallucination in large language models refers to the generation of content that is fluent and plausible but factually incorrect or unsupported by the input context \cite{ji2023survey}. Two primary types exist: \textit{intrinsic hallucination}, where the output contradicts the source, and \textit{extrinsic hallucination}, where the output cannot be verified from the source.
+
+\subsection{Detection Methods}
+
+\paragraph{NLI-Based Detection} Natural Language Inference models can detect hallucinations by checking if generated claims are entailed by, contradicted by, or neutral to source knowledge \cite{honovich2022true}. This approach leverages pre-trained NLI models like DeBERTa-MNLI without task-specific training.
+
+\paragraph{Self-Consistency Methods} SelfCheckGPT \cite{manakul2023selfcheckgpt} detects hallucinations by sampling multiple responses and measuring consistency---hallucinated facts tend to vary across samples while factual information remains stable.
+
+\paragraph{Retrieval-Augmented Verification} These methods retrieve external evidence to verify claims, particularly effective for factual domains \cite{thorne2018fever}.
+
+\subsection{Benchmarks}
+
+\paragraph{HaluEval} \citet{li2023halueval} introduced a large-scale benchmark with 35,000 samples spanning QA, dialogue, and summarization tasks, with human-annotated hallucination labels.
+
+\paragraph{SHROOM} The SemEval-2024 Task 6 \cite{mickus2024shroom} provides a shared task for hallucination detection with standardized evaluation.
+
+\paragraph{SciFact} \citet{wadden2020fact} presents a scientific claim verification dataset that enables domain-specific hallucination evaluation.
+
+% ============================================================================
+\section{Methodology}
+% ============================================================================
+
+\subsection{Problem Formulation}
+
+Given a query $x$, generated response $y$, and reference knowledge $D$, we formulate hallucination detection as binary classification:
+\begin{equation}
+f_\theta(x, y, D) \rightarrow \{0, 1\}
+\end{equation}
+where 0 indicates factual output and 1 indicates hallucination.
+
+\subsection{Baseline 1: Zero-Shot NLI Detection}
+
+Our first baseline uses DeBERTa-v3-base fine-tuned on MNLI, FEVER, and ANLI \cite{he2021deberta}. We format inputs as:
+
+\begin{quote}
+\texttt{Premise:} [Question + Knowledge] \\
+\texttt{Hypothesis:} [Generated Response]
+\end{quote}
+
+We map NLI predictions to hallucination labels:
+\begin{itemize}
+    \item \textbf{Contradiction} $\rightarrow$ Hallucinated (1)
+    \item \textbf{Entailment/Neutral} $\rightarrow$ Factual (0)
+\end{itemize}
+
+This mapping directly implements our proposal's formulation: detecting whether a response is ``contradicted by domain corpus $D$."
+
+\subsection{Baseline 2: Fine-Tuned Detection}
+
+We fine-tune DeBERTa-v3-base directly for binary hallucination classification on the HaluEval training set. Training details:
+\begin{itemize}
+    \item \textbf{Model:} microsoft/deberta-v3-base (184M parameters)
+    \item \textbf{Learning rate:} 2e-5 with linear warmup
+    \item \textbf{Batch size:} 8 (with gradient accumulation)
+    \item \textbf{Epochs:} 3
+    \item \textbf{Max sequence length:} 512 tokens
+    \item \textbf{Loss:} Binary cross-entropy (corresponding to $\mathcal{L}_{\text{span\_classification}}$ in our proposal)
+\end{itemize}
+
+\subsection{Dataset}
+
+We use HaluEval \cite{li2023halueval} with the following splits:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Task} & \textbf{Train} & \textbf{Val} & \textbf{Test} \\
+\midrule
+QA & 7,000 & 1,500 & 1,500 \\
+Dialogue & 7,000 & 1,500 & 1,500 \\
+Summarization & 7,000 & 1,500 & 1,500 \\
+\midrule
+\textbf{Total} & 21,000 & 4,500 & 4,500 \\
+\bottomrule
+\end{tabular}
+\caption{Dataset statistics (70/15/15 split).}
+\label{tab:dataset}
+\end{table}
+
+% ============================================================================
+\section{Results}
+% ============================================================================
+
+\subsection{Current Results}
+
+Table \ref{tab:main_results} presents our baseline results on the HaluEval test set.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Acc} & \textbf{P} & \textbf{R} & \textbf{F1} \\
+\midrule
+Zero-Shot NLI & 0.60 & 0.73 & 0.31 & 0.43 \\
+Fine-Tuned DeBERTa & 0.91 & 0.88 & 0.95 & \textbf{0.91} \\
+\bottomrule
+\end{tabular}
+\caption{Main results on HaluEval test set. P=Precision, R=Recall.}
+\label{tab:main_results}
+\end{table}
+
+Fine-tuning improved F1 by 111.9\% over the zero-shot baseline (0.43 $\rightarrow$ 0.91), demonstrating the value of task-specific training for hallucination detection. The zero-shot model suffered from low recall (0.31), missing the majority of hallucinations, while the fine-tuned model achieves 95\% recall.
+
+\subsection{Ablation: Performance by Task}
+
+Table \ref{tab:task_results} shows performance breakdown by task type.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Task} & \textbf{Acc} & \textbf{P} & \textbf{R} & \textbf{F1} \\
+\midrule
+QA & 0.97 & 0.98 & 0.96 & 0.97 \\
+Dialogue & 0.82 & 0.75 & 0.91 & 0.82 \\
+Summarization & 0.96 & 0.93 & 0.98 & 0.96 \\
+\bottomrule
+\end{tabular}
+\caption{Fine-tuned model performance by task type.}
+\label{tab:task_results}
+\end{table}
+
+QA achieves the highest F1 (0.97), likely due to clearer factual grounding where answers either match or contradict the provided knowledge. Summarization also performs strongly (F1=0.96), as hallucinations in summaries tend to introduce verifiable factual errors. Dialogue proves most challenging (F1=0.82), likely because conversational responses involve more nuanced language and implicit references that are harder to verify against the knowledge context.
+
+\subsection{Upcoming Results}
+
+We plan to evaluate the following in subsequent updates:
+\begin{enumerate}
+    \item \textbf{Cross-dataset evaluation:} Test on SciFact and SHROOM to assess generalization
+    \item \textbf{Domain-specific performance:} Evaluate on medical/scientific subsets
+    \item \textbf{Retrieval-augmented detection:} Add evidence retrieval component (Proposal Phase 1)
+\end{enumerate}
+
+\subsection{Ablation Studies Completed}
+
+\paragraph{Task Type Analysis} As shown in Table \ref{tab:task_results}, detection difficulty varies significantly across generation tasks. QA and summarization tasks exhibit clearer factual boundaries, enabling high-confidence detection, while dialogue requires handling more ambiguous conversational semantics.
+
+\subsection{Upcoming Ablation Studies}
+
+\begin{enumerate}
+    \item \textbf{Context ablation:} Performance with/without knowledge context
+    \item \textbf{Model size:} Compare base vs. large model variants
+    \item \textbf{Training data size:} Learning curve analysis
+    \item \textbf{Uncertainty quantification:} Monte Carlo Dropout for calibration (Proposal Phase 2)
+\end{enumerate}
+
+% ============================================================================
+\section{Problems Encountered}
+% ============================================================================
+
+\paragraph{Scope Adjustment} Our original proposal included span-level detection as described in our problem formulation: ``For each token span $s_i$, predict whether the span is unsupported or contradicted by domain corpus $D$.'' Based on feasibility analysis, we narrowed scope to response-level binary classification as the primary deliverable. Span-level detection remains a stretch goal.
+
+\paragraph{Compute Constraints} Our proposal specified fine-tuning ``a 7B parameter open-source model (e.g., LLaMA-2-7B or Mistral-7B).'' Training such large models proved infeasible with free-tier GPU resources (Kaggle P100 with 16GB VRAM). We adapted by using DeBERTa-base (184M parameters), which validates our core NLI-based detection approach while fitting within compute constraints.
+
+\paragraph{Training Stability} Initial fine-tuning attempts encountered NaN losses due to fp16 numerical overflow with DeBERTa's architecture. We resolved this by forcing fp32 precision throughout training, which stabilized gradients at the cost of slightly higher memory usage.
+
+\paragraph{Class Imbalance} Initial experiments showed slight class imbalance in some task subsets. We address this through stratified splitting and will explore weighted loss functions in future iterations.
+
+% ============================================================================
+\section{Conclusion and Next Steps}
+% ============================================================================
+
+We have established strong baselines for hallucination detection, with fine-tuned DeBERTa achieving F1=0.91 on HaluEval, substantially exceeding our proposal target of F1$\geq$0.75. Our results validate the core insight from our proposal: NLI-based contradiction detection effectively identifies hallucinations, and task-specific fine-tuning dramatically improves upon zero-shot approaches.
+
+\paragraph{Connection to Proposal Phases}
+
+\begin{itemize}
+    \item \textbf{Phase 1 (Retrieval):} Currently using HaluEval's provided knowledge; will add BioBERT/PubMedBERT retrieval
+    \item \textbf{Phase 2 (Detection):} Implemented response-level detection; will add uncertainty quantification
+    \item \textbf{Phase 3 (DPO):} Planned for later if time permits
+\end{itemize}
+
+\paragraph{Next Steps for Update 2}
+\begin{itemize}
+    \item Implement retrieval-augmented verification using dense retrievers
+    \item Add uncertainty quantification with Monte Carlo Dropout
+    \item Evaluate on domain-specific datasets (SciFact for scientific claims)
+    \item Explore ensemble methods combining multiple detection signals
+\end{itemize}
+
+\paragraph{Code Repository} \url{https://github.com/varunteja99/hallucination-detection-nlp}
+
+% ============================================================================
+% References
+% ============================================================================
+
+\bibliographystyle{acl_natbib}
+\bibliography{custom}
+
+\end{document}
