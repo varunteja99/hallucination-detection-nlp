@@ -4,7 +4,7 @@
 
 Our fine-tuned DeBERTa-v3-base model is hosted on HuggingFace Hub:
 
-🤗 **[varunteja99/hallucination-detector-deberta](https://huggingface.co/varunteja99/hallucination-detector-deberta)**
+🤗 **[varunchundru/hallucination-detector-deberta](https://huggingface.co/varunchundru/hallucination-detector-deberta)**
 
 ### Model Details
 
@@ -24,7 +24,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 
 # Load from HuggingFace
-model_name = "varunteja99/hallucination-detector-deberta"
+model_name = "varunchundru/hallucination-detector-deberta"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 

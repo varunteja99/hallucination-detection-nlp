@@ -63,7 +63,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 
 # Load model from HuggingFace
-model_name = "varunteja99/hallucination-detector-deberta"
+model_name = "varunchundru/hallucination-detector-deberta"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 
