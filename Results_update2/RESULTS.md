@@ -103,15 +103,7 @@ The baseline achieves **21% accuracy on a balanced binary task**, which is signi
 
 ---
 
-## Recommended Next Steps
 
-| Approach | Expected Improvement | Rationale |
-|---|---|---|
-| NLI cross-encoder (e.g., DeBERTa-v3 trained on NLI) | High | Directly measures entailment between knowledge and answer |
-| Fine-tuned BERT/RoBERTa | High | Learns contextual representations that capture factual consistency |
-| Answer-only features | Moderate | Isolate the answer text to avoid shared-context dilution |
-| LLM-as-judge (GPT-4, Claude) | High | Zero-shot semantic reasoning over knowledge-answer pairs |
-| Sentence-level embeddings + cosine similarity | Moderate | Captures semantic similarity between knowledge and answer |
 
 ---
 
