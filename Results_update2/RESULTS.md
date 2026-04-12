@@ -93,10 +93,13 @@ The improved pipeline fixes this with two key changes:
 - Performance may not generalize to domains outside HotpotQA-style questions
 - Adversarial hallucinations designed to mimic the style of correct answers would likely fool this model
 - A transformer-based approach (see `01_baseline_nli_finetuning.ipynb`, ~91% with DeBERTa) uses semantic reasoning and may be more robust
+- TF-IDF + Logistic Regression is **not suitable** for hallucination detection on HaluEval.
 - The model's worse-than-random performance confirms that **lexical overlap is anti-predictive** for this task — hallucinated answers can be lexically similar to evidence while being factually wrong.
 - This baseline establishes a clear **lower bound** and motivates the need for semantic approaches.
 
 ---
+
+
 
 ---
 
