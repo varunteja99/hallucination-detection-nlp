@@ -1,0 +1,261 @@
+\documentclass[11pt]{article}
+
+\usepackage[final]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{url}
+
+\title{Domain-Specific Hallucination Detection in Large Language Models: Project Update 2}
+
+\author{Varun Chundru \and Debasmita Biswas \\
+  Department of Computer Science \\
+  Purdue University Fort Wayne \\
+  \texttt{\{vchundru, biswd01\}@pfw.edu}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Large Language Models (LLMs) frequently produce hallucinations---fluent but factually unsupported outputs---posing risks in high-stakes domains. We develop a hallucination detection framework combining Natural Language Inference (NLI) with domain-specific fine-tuning, targeting response-level binary classification on the HaluEval benchmark. In this update, we report results across five approaches: (1) a TF-IDF + Logistic Regression baseline achieving F1=0.21, (2) a retrieval similarity detector (F1=0.66), (3) a zero-shot NLI detector (F1=0.43), (4) a fine-tuned DeBERTa-v3-base model achieving F1=0.91, and (5) a Monte Carlo Dropout ensemble achieving F1=0.93. We further demonstrate that uncertainty-based selective prediction can reach near-perfect accuracy, that temperature scaling reduces calibration error by 36.8\%, and that cross-dataset transfer to SciFact reveals significant domain gap. Code and model weights are available at: \url{https://github.com/varunteja99/hallucination-detection-nlp}.
+\end{abstract}
+
+% ============================================================================
+\section{Introduction}
+% ============================================================================
+
+Large Language Models have demonstrated remarkable generative capabilities, yet they frequently produce hallucinations: outputs that are fluent and seemingly plausible but factually incorrect or unsupported by the provided context \cite{ji2023survey}. This problem is particularly dangerous in high-stakes domains such as healthcare, legal analysis, and scientific research, where users may trust model outputs without independent verification.
+
+Hallucinations manifest in two primary forms. \textit{Intrinsic hallucinations} directly contradict the source material, while \textit{extrinsic hallucinations} introduce claims that cannot be verified from the given context. Both types undermine the reliability of LLM-based systems.
+
+This project frames hallucination detection as a binary classification problem: given a knowledge context and an LLM-generated response, predict whether the response is \textit{faithful} or \textit{hallucinated}. We approach this through Natural Language Inference, hypothesizing that a response contradicting its source knowledge is hallucinated.
+
+In this update, we present: (1) a simple ML baseline demonstrating that surface-level features are insufficient, (2) retrieval-augmented verification using dense embeddings, (3) Monte Carlo Dropout uncertainty quantification showing that incorrect predictions exhibit 5.75$\times$ higher uncertainty, (4) temperature scaling that reduces Expected Calibration Error from 0.078 to 0.050, and (5) cross-dataset evaluation on SciFact using PubMedBERT retrieval revealing significant domain transfer challenges.
+
+% ============================================================================
+\section{Related Work}
+% ============================================================================
+
+We organize related work around three threads that directly inform our approach: the hallucination detection benchmarks we build upon, the NLI-based detection paradigm we adopt, and the pre-trained model architecture we fine-tune.
+
+\subsection{Hallucination Benchmarks}
+
+Our work builds directly on the HaluEval benchmark \cite{li2023halueval}, which provides 30,000 samples across QA, dialogue, and summarization tasks with human-annotated hallucination labels. HaluEval's design---pairing a knowledge context with a generated response and a binary label---naturally maps to an NLI framing, which motivates our approach.
+
+Other hallucination benchmarks inform our evaluation strategy. FEVER \cite{thorne2018fever} established the paradigm of claim verification against evidence documents. SciFact \cite{wadden2020fact} enables domain-specific evaluation on scientific claims, which we use for cross-dataset transfer evaluation in this update.
+
+\subsection{NLI-Based Hallucination Detection}
+
+Our detection approach is grounded in the insight that hallucination detection can be cast as an NLI problem: if a generated response is \textit{not entailed} by the source knowledge, it is likely hallucinated.
+
+\citet{honovich2022true} demonstrated that NLI models can evaluate factual consistency by decomposing outputs into atomic claims and checking entailment against source documents. Their TRUE framework showed that off-the-shelf NLI models provide a strong zero-shot signal for hallucination detection, which we confirm with our zero-shot baseline. However, their work also revealed that zero-shot NLI suffers from low recall---a finding we replicate (recall=0.31)---motivating our fine-tuning approach.
+
+SelfCheckGPT \cite{manakul2023selfcheckgpt} detects hallucinations by sampling multiple responses and measuring consistency. Our Monte Carlo Dropout experiment draws on similar intuition: multiple stochastic forward passes through the same model can reveal prediction uncertainty.
+
+\subsection{DeBERTa and Pre-trained Language Models for NLI}
+
+We select DeBERTa-v3-base \cite{he2021deberta,he2023debertav3} as our backbone because of its strong performance on NLI benchmarks and its architectural innovations. DeBERTa introduced \textit{disentangled attention}, which separately encodes content and position information:
+\[
+A_{i,j} = H_i H_j^\top + H_i P_{i|j}^\top + P_{i|j} H_j^\top
+\]
+This decomposition captures content-to-content, content-to-position, and position-to-content interactions separately, enabling nuanced reasoning about premise-hypothesis relationships. DeBERTa-v3 further improved pre-training efficiency through replaced token detection (ELECTRA-style).
+
+% ============================================================================
+\section{Methodology}
+% ============================================================================
+
+\subsection{Task Formulation}
+
+Given a knowledge context $k$, a question or prompt $q$, and a generated response $r$, we predict a binary label $y \in \{0, 1\}$ indicating whether $r$ is factual ($y=0$) or hallucinated ($y=1$).
+
+\subsection{Model 1: TF-IDF + Logistic Regression Baseline}
+
+We extract TF-IDF features (50,000 features, unigrams + bigrams, sublinear TF) from the concatenated knowledge-question-answer text and train a Logistic Regression classifier (C=1.0, saga solver). This baseline tests whether surface-level lexical patterns suffice for hallucination detection.
+
+\subsection{Model 2: Zero-Shot NLI Detection}
+
+We use \texttt{MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli} without HaluEval-specific training, mapping contradiction $\rightarrow$ hallucinated and entailment/neutral $\rightarrow$ factual.
+
+\subsection{Model 3: Fine-Tuned DeBERTa-v3-base}
+
+We initialize from \texttt{microsoft/deberta-v3-base} (184M parameters) and add a binary classification head. Training uses AdamW (lr=$2 \times 10^{-5}$), batch size 8, 3 epochs, max length 512, float32 precision, on NVIDIA P100 (Kaggle).
+
+\subsection{Retrieval-Augmented Verification}
+
+We compute cosine similarity between knowledge and response embeddings using the \texttt{all-MiniLM-L6-v2} sentence transformer. The hypothesis is that hallucinated responses exhibit lower similarity to source knowledge.
+
+\subsection{Monte Carlo Dropout Uncertainty}
+
+We run 20 forward passes through the fine-tuned DeBERTa model with dropout enabled at inference time. The mean probability across passes serves as the prediction; the standard deviation captures uncertainty. This implements the $\mathcal{L}_{\text{calibration}}$ component from our proposal.
+
+\subsection{Temperature Scaling}
+
+We learn a scalar temperature $T$ on the validation set by minimizing NLL: $\text{NLL}(\text{logits}/T, \text{labels})$. Calibrated probabilities $\text{softmax}(\text{logits}/T)$ are evaluated using Expected Calibration Error (ECE).
+
+\subsection{Cross-Dataset Evaluation on SciFact}
+
+We evaluate our HaluEval-trained model on SciFact \cite{wadden2020fact} (1,109 claims, 5,183 abstracts). We use PubMedBERT (\texttt{pritamdeka/S-PubMedBert-MS-MARCO}) for domain-specific retrieval, then classify retrieved evidence-claim pairs with our fine-tuned DeBERTa.
+
+% ============================================================================
+\section{Experimental Setup}
+% ============================================================================
+
+\subsection{Dataset}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Task} & \textbf{Train} & \textbf{Val} & \textbf{Test} \\
+\midrule
+QA & 7,000 & 1,500 & 1,500 \\
+Dialogue & 7,000 & 1,500 & 1,500 \\
+Summarization & 7,000 & 1,500 & 1,500 \\
+\midrule
+\textbf{Total} & \textbf{21,000} & \textbf{4,500} & \textbf{4,500} \\
+\bottomrule
+\end{tabular}
+\caption{HaluEval dataset splits (70/15/15, seed=42).}
+\label{tab:dataset}
+\end{table}
+
+The TF-IDF baseline was evaluated on the HaluEval QA subset (10,000 pairs expanded to 20,000 balanced samples) by Debasmita Biswas.
+
+\subsection{Evaluation Metrics}
+
+We report Accuracy, Precision, Recall, F1-score, and AUROC. F1 is our primary metric. For calibration, we report ECE with 15 bins.
+
+% ============================================================================
+\section{Results}
+% ============================================================================
+
+\subsection{Main Results}
+
+Table~\ref{tab:main_results} presents results across all approaches.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Acc} & \textbf{P} & \textbf{R} & \textbf{F1} & \textbf{AUC} \\
+\midrule
+TF-IDF + LogReg & 0.21 & 0.21 & 0.22 & 0.21 & -- \\
+Retrieval Sim. & 0.49 & 0.49 & 1.00 & 0.66 & 0.38 \\
+Zero-Shot NLI & 0.60 & 0.73 & 0.31 & 0.43 & 0.65 \\
+Fine-Tuned DeBERTa & 0.91 & 0.88 & 0.95 & 0.91 & 0.98 \\
+MC Dropout (20) & \textbf{0.93} & \textbf{0.93} & 0.93 & \textbf{0.93} & \textbf{0.98} \\
+Calibrated DeBERTa & 0.91 & 0.88 & \textbf{0.95} & 0.91 & 0.98 \\
+\bottomrule
+\end{tabular}
+\caption{Overall results on HaluEval. TF-IDF evaluated on QA subset only.}
+\label{tab:main_results}
+\end{table}
+
+The TF-IDF baseline achieves only 21\% accuracy---\textit{worse than random chance} on a balanced binary task. This occurs because the shared knowledge and question tokens dominate the TF-IDF representation, drowning out the discriminative signal from the answer. Additionally, ChatGPT-generated hallucinations have stylistic patterns that are anti-correlated with the true labels. This confirms that bag-of-words features fundamentally cannot capture the semantic reasoning required for hallucination detection, strongly justifying the use of transformer models.
+
+Retrieval similarity alone achieves F1=0.66 but with a degenerate threshold (0.96), effectively classifying nearly all samples as hallucinated (recall=1.0, precision=0.49). The similarity distributions for factual and hallucinated samples overlap heavily.
+
+MC Dropout averaging over 20 forward passes improves F1 from 0.91 to 0.93, improving both precision (0.88 $\rightarrow$ 0.93) and accuracy (0.91 $\rightarrow$ 0.93). The ensemble effect of averaging stochastic predictions reduces noise.
+
+\subsection{Ablation: Performance by Task Type}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Task} & \textbf{Acc} & \textbf{P} & \textbf{R} & \textbf{F1} \\
+\midrule
+QA & 0.97 & 0.98 & 0.96 & 0.97 \\
+Dialogue & 0.82 & 0.75 & 0.91 & 0.82 \\
+Summarization & 0.96 & 0.93 & 0.98 & 0.96 \\
+\bottomrule
+\end{tabular}
+\caption{Fine-tuned DeBERTa performance by task type.}
+\label{tab:task_results}
+\end{table}
+
+QA achieves the highest F1 (0.97) due to clear factual grounding. Dialogue proves most challenging (F1=0.82) with lower precision (0.75), as conversational hallucinations involve more nuanced, implicit claims.
+
+\subsection{Uncertainty Analysis}
+
+MC Dropout uncertainty reveals a strong correlation with prediction correctness. Incorrect predictions exhibit a mean uncertainty of 0.145, which is \textbf{5.75$\times$ higher} than correct predictions (mean uncertainty 0.025). This confirms that the model reliably flags its own errors through uncertainty estimation.
+
+The selective prediction curve shows that by filtering out uncertain predictions, accuracy approaches 100\%. At 5\% coverage (retaining only the most confident predictions), accuracy reaches 1.00; at 50\% coverage, accuracy remains above 0.99. This has practical implications: a human reviewer could focus exclusively on uncertain predictions, reducing review burden while maintaining high reliability.
+
+\subsection{Calibration Results}
+
+Temperature scaling reduced ECE from 0.078 to 0.050, a 36.8\% improvement. Before calibration, the model is overconfident---high-confidence predictions are correct less often than their confidence suggests. After calibration, predicted confidence more closely tracks actual accuracy. Temperature scaling does not change predictions or F1; it adjusts probability calibration for more reliable confidence estimates.
+
+\subsection{Cross-Dataset Evaluation: SciFact}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Evaluation} & \textbf{Acc} & \textbf{P} & \textbf{R} & \textbf{F1} & \textbf{AUC} \\
+\midrule
+HaluEval (in-domain) & 0.91 & 0.88 & 0.95 & 0.91 & 0.98 \\
+SciFact (cross-dataset) & 0.34 & 0.34 & 0.98 & 0.50 & 0.40 \\
+\bottomrule
+\end{tabular}
+\caption{Cross-dataset transfer: HaluEval-trained model on SciFact (693 labeled claims).}
+\label{tab:scifact}
+\end{table}
+
+Our HaluEval-trained model performs poorly on SciFact (F1=0.50), classifying 686 of 693 labeled claims as hallucinated regardless of true label (SUPPORT: 456, CONTRADICT: 237). This reveals a significant domain gap: the model has learned HaluEval-specific patterns rather than general factual consistency reasoning. Scientific claims use different vocabulary, reasoning patterns, and evidence structures. Domain-specific fine-tuning on scientific data would be required for effective scientific hallucination detection.
+
+% ============================================================================
+\section{Progress Since Update 1}
+% ============================================================================
+
+\begin{enumerate}
+    \item \textbf{Addressed professor feedback:} Revised related work to connect directly to our methods. Added DeBERTa architecture description. Added simple ML baseline.
+    \item \textbf{TF-IDF baseline (Debasmita):} 21\% accuracy on HaluEval QA confirms lexical features are anti-predictive.
+    \item \textbf{Retrieval-augmented verification:} Dense similarity is insufficient as standalone detector (F1=0.66, degenerate threshold).
+    \item \textbf{MC Dropout uncertainty:} Improved F1 from 0.91 to 0.93; incorrect predictions show 5.75$\times$ higher uncertainty.
+    \item \textbf{Temperature scaling:} ECE reduced 36.8\% (0.078 $\rightarrow$ 0.050).
+    \item \textbf{SciFact cross-dataset evaluation:} PubMedBERT retrieval + DeBERTa classification reveals significant domain gap (F1 drops 0.91 $\rightarrow$ 0.50).
+    \item \textbf{Model deployment:} Fine-tuned model on HuggingFace (\texttt{varunchundru/hallucination-detector-deberta}).
+\end{enumerate}
+
+% ============================================================================
+\section{Ideas That Didn't Work Out}
+% ============================================================================
+
+\paragraph{fp16 Mixed Precision Training.} Caused NaN values due to DeBERTa's disentangled attention. Resolved by using float32.
+
+\paragraph{Retrieval Similarity as Standalone Detector.} Similarity distributions for factual and hallucinated samples overlap heavily, yielding a degenerate threshold that classifies nearly everything as hallucinated.
+
+\paragraph{TF-IDF on Full Concatenated Text.} Achieves 21\%---below random chance---because shared context tokens dominate and ChatGPT-generated hallucinations have anti-correlated style patterns.
+
+\paragraph{Cross-Dataset Transfer Without Fine-Tuning.} Model classifies 99\% of SciFact claims as hallucinated, indicating overfitting to HaluEval-specific patterns.
+
+\paragraph{Span-Level Detection and Large Models.} Both deferred due to scope and compute constraints. Response-level classification with DeBERTa-base (184M) achieves strong results.
+
+% ============================================================================
+\section{Next Steps}
+% ============================================================================
+
+\begin{enumerate}
+    \item \textbf{Context ablation:} Performance with/without knowledge context.
+    \item \textbf{Training data scaling:} Learning curves at 10\%, 25\%, 50\%, 100\%.
+    \item \textbf{Ensemble methods:} Combine DeBERTa + retrieval similarity + uncertainty.
+    \item \textbf{Phase 3 (DPO):} If time permits, explore Direct Preference Optimization; otherwise Future Work.
+    \item \textbf{Final presentation:} 20-minute presentation.
+\end{enumerate}
+
+\paragraph{Code Repository} \url{https://github.com/varunteja99/hallucination-detection-nlp}
+
+\bibliography{custom}
+
+\end{document}
