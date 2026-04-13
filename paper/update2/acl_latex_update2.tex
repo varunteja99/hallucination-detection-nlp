@@ -1,6 +1,6 @@
 \documentclass[11pt]{article}
 
-\usepackage[final]{acl}
+\usepackage[hyperref]{acl}
 \usepackage{times}
 \usepackage{latexsym}
 \usepackage[T1]{fontenc}
@@ -84,7 +84,7 @@ We use \texttt{MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli} without HaluEval-sp
 
 \subsection{Model 3: Fine-Tuned DeBERTa-v3-base}
 
-We initialize from \texttt{microsoft/deberta-v3-base} (184M parameters) and add a binary classification head. Training uses AdamW (lr=$2 \times 10^{-5}$), batch size 8, 3 epochs, max length 512, float32 precision, on NVIDIA P100 (Kaggle).
+We initialize from \texttt{microsoft/deberta-v3-base} (184M parameters) and add a binary classification head. Training uses AdamW (lr=$2 \times 10^{-5}$), batch size 8, 3 epochs, max length 512, float32 precision, on TESLA T4x2 (Kaggle).
 
 \subsection{Retrieval-Augmented Verification}
 
@@ -126,7 +126,7 @@ Summarization & 7,000 & 1,500 & 1,500 \\
 \label{tab:dataset}
 \end{table}
 
-The TF-IDF baseline was evaluated on the HaluEval QA subset (10,000 pairs expanded to 20,000 balanced samples) by Debasmita Biswas.
+The TF-IDF baseline was evaluated on the HaluEval QA subset (10,000 pairs expanded to 20,000 balanced samples).
 
 \subsection{Evaluation Metrics}
 
@@ -220,12 +220,12 @@ Our HaluEval-trained model performs poorly on SciFact (F1=0.50), classifying 686
 
 \begin{enumerate}
     \item \textbf{Addressed professor feedback:} Revised related work to connect directly to our methods. Added DeBERTa architecture description. Added simple ML baseline.
-    \item \textbf{TF-IDF baseline (Debasmita):} 21\% accuracy on HaluEval QA confirms lexical features are anti-predictive.
+    \item \textbf{TF-IDF baseline:} 21\% accuracy on HaluEval QA confirms lexical features are anti-predictive.
     \item \textbf{Retrieval-augmented verification:} Dense similarity is insufficient as standalone detector (F1=0.66, degenerate threshold).
     \item \textbf{MC Dropout uncertainty:} Improved F1 from 0.91 to 0.93; incorrect predictions show 5.75$\times$ higher uncertainty.
     \item \textbf{Temperature scaling:} ECE reduced 36.8\% (0.078 $\rightarrow$ 0.050).
     \item \textbf{SciFact cross-dataset evaluation:} PubMedBERT retrieval + DeBERTa classification reveals significant domain gap (F1 drops 0.91 $\rightarrow$ 0.50).
-    \item \textbf{Model deployment:} Fine-tuned model on HuggingFace (\texttt{varunchundru/hallucination-detector-deberta}).
+    \item \textbf{Model deployment:} Fine-tuned model on HuggingFace (\url{varunchundru/hallucination-detector-deberta}).
 \end{enumerate}
 
 % ============================================================================
