@@ -1,0 +1,216 @@
+% Final Paper - Domain-Specific Hallucination Detection in LLMs
+% ACL Format
+\documentclass[11pt]{article}
+\usepackage[hyperref]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+
+\title{Domain-Specific Hallucination Detection in Large Language Models}
+
+\author{Varun Chundru \and Debasmita Biswas \\
+  Department of Computer Science \\
+  Purdue University Fort Wayne \\
+  \texttt{\{vchundru,biswd01\}@pfw.edu}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Large language models generate fluent text that can contain unfaithful claims---a phenomenon known as hallucination. We present a multi-signal detection pipeline combining fine-tuned DeBERTa-v3 classification, Monte Carlo Dropout uncertainty quantification, and temperature-scaled calibration for response-level hallucination detection. Evaluated on the HaluEval benchmark, our pipeline achieves F1=0.915 and AUROC=0.977 on general-domain tasks, with per-task F1 scores of 0.97 (QA), 0.96 (Summarization), and 0.82 (Dialogue). MC Dropout inference improves accuracy to 93.2\%. A context ablation study confirms the model performs genuine entailment reasoning rather than exploiting surface patterns, with summarization F1 dropping 24\% when knowledge context is removed. Learning curve analysis reveals that 25\% of training data captures 74\% of full-data performance. Beyond detection, we apply Direct Preference Optimization (DPO) to a Qwen2.5-0.5B generator, reducing its hallucination rate from 85.5\% to 37.7\% (55.9\% relative reduction) as measured by our detector. Cross-domain evaluation on the SciFact biomedical benchmark shows that general-domain training transfers poorly (F1=0.52), motivating domain-specific fine-tuning strategies. PubMedBERT fine-tuned on SciFact achieves F1=0.63 and AUROC=0.81, demonstrating that domain-matched pre-training is the strongest adaptation strategy. Code and models are available at \url{https://github.com/varunchundru}.
+\end{abstract}
+
+\section{Introduction}
+
+Large language models (LLMs) produce text that is syntactically fluent and contextually plausible but can contain fabricated facts, misattributed claims, and unsupported inferences~\citep{ji2023survey}. These \textit{hallucinations} pose a significant barrier to deploying LLMs in high-stakes domains such as medicine, law, and scientific research, where factual accuracy is essential.
+
+The hallucination detection problem can be formulated as a natural language inference (NLI) task: given a knowledge source $K$, a prompt $Q$, and a generated response $R$, determine whether $R$ is \textit{faithful} to or \textit{hallucinated} with respect to $K$. While prior work has explored entailment-based and retrieval-based approaches, two critical gaps remain. First, single-model detectors provide point estimates without conveying prediction confidence, leaving practitioners unable to distinguish high-certainty detections from ambiguous cases. Second, detectors trained on general-domain benchmarks often fail on specialized domains where terminology and reasoning patterns differ substantially.
+
+This paper makes four contributions. (1) We develop a multi-signal detection pipeline combining fine-tuned DeBERTa-v3 classification with MC Dropout uncertainty quantification, achieving F1=0.915 and AUROC=0.977 on HaluEval. (2) We conduct ablation studies---context removal, learning curves, and ensemble analysis---that characterize when and why the detector succeeds or fails. (3) We demonstrate that Direct Preference Optimization reduces hallucination rates by 55.9\% in a generator model, evaluated by our detector in a closed-loop setup. (4) We evaluate cross-domain transfer to biomedical scientific claims (SciFact) and show that PubMedBERT fine-tuning achieves AUROC=0.808, demonstrating that domain-matched pre-training is the most effective adaptation strategy.
+
+
+\section{Related Work}
+
+\paragraph{Hallucination Detection.} Hallucination in LLMs has been categorized into intrinsic hallucination (contradicting the source) and extrinsic hallucination (introducing unverifiable claims)~\citep{ji2023survey}. Detection approaches span entailment-based classification~\citep{honovich2022true}, retrieval-augmented verification~\citep{min2023factscore}, and uncertainty estimation~\citep{kuhn2023semantic}. \citet{li2023halueval} introduced the HaluEval benchmark with task-specific hallucinated samples generated via ChatGPT, providing a controlled evaluation framework across QA, dialogue, and summarization. Our work builds on this benchmark while extending the analysis with uncertainty quantification and cross-domain evaluation.
+
+\paragraph{Uncertainty Quantification.} Monte Carlo Dropout~\citep{gal2016dropout} provides a practical approximation to Bayesian inference by performing multiple stochastic forward passes with dropout enabled at test time. The variance across passes captures epistemic uncertainty, which has been applied to out-of-distribution detection~\citep{lakshminarayanan2017simple} and selective prediction. We integrate MC Dropout into our detection pipeline, showing it improves accuracy from 91.3\% to 93.2\%.
+
+\paragraph{Preference Optimization.} Direct Preference Optimization (DPO) frames alignment as a classification problem over preference pairs, avoiding the instability of reinforcement learning from human feedback~\citep{rafailov2023direct}. While DPO has primarily been applied to safety and helpfulness alignment, we apply it specifically to hallucination reduction, using faithful and hallucinated responses as preference pairs.
+
+
+\section{Methodology}
+
+\subsection{Detection Pipeline}
+
+Our detection pipeline has three components: a fine-tuned NLI classifier, MC Dropout uncertainty estimation, and post-hoc temperature scaling.
+
+\paragraph{DeBERTa-v3 Classifier.} We use DeBERTa-v3-base~\citep{he2023debertav3} as our core classifier. DeBERTa employs a disentangled attention mechanism that separates content and position representations into distinct vectors, computing attention weights using disentangled matrices for content-to-content, content-to-position, and position-to-content interactions. An enhanced mask decoder aggregates these signals to produce context-aware token representations. We add a classification head and fine-tune for binary NLI: given a concatenated input $[Q; K; R]$, the model outputs $P(\text{hallucinated} \mid Q, K, R)$. Training uses AdamW with learning rate $2 \times 10^{-5}$, linear warmup over 10\% of steps, batch size 16, and 3 epochs with fp16 mixed precision.
+
+\paragraph{MC Dropout Uncertainty.} At inference, we perform $T=20$ stochastic forward passes with dropout enabled. The mean probability $\bar{p} = \frac{1}{T}\sum_{t=1}^{T} p_t$ serves as the calibrated prediction, and the standard deviation $\sigma = \sqrt{\frac{1}{T}\sum_{t=1}^{T}(p_t - \bar{p})^2}$ captures epistemic uncertainty. High $\sigma$ indicates the model is uncertain about its classification, which is valuable for flagging ambiguous cases requiring human review.
+
+\paragraph{Temperature Scaling.} We learn a scalar temperature $T^*$ on the validation set by minimizing negative log-likelihood: $T^* = \arg\min_T \mathcal{L}_{\text{NLL}}(\text{softmax}(\mathbf{z}/T), y)$. Without temperature scaling, MC Dropout variance is suppressed on uncertain examples and NLL loss is inflated on wrong-but-confident predictions, causing threshold instability across domains. We optimize $T^*$ using scipy's minimize function.
+
+\subsection{DPO Hallucination Mitigation}
+
+Beyond detection, we train a generator model to produce fewer hallucinations using DPO~\citep{rafailov2023direct}. We construct preference pairs from HaluEval: for each prompt, the reference (faithful) answer is the \textit{chosen} response and the hallucinated answer is the \textit{rejected} response. We fine-tune Qwen2.5-0.5B-Instruct~\citep{qwen2025qwen25} on 21K preference pairs for 1 epoch with learning rate $5 \times 10^{-6}$ and $\beta=0.1$. At evaluation, our DeBERTa detector scores held-out generations from both the base and DPO-trained models, providing a detector-in-the-loop assessment of hallucination reduction.
+
+
+\section{Experimental Setup}
+
+\subsection{Datasets}
+
+\paragraph{HaluEval.} The HaluEval benchmark~\citep{li2023halueval} contains 30,000 samples across three tasks---QA, Dialogue, and Summarization---each with 10,000 balanced examples (5,000 faithful, 5,000 hallucinated). Hallucinated responses were generated by ChatGPT with task-specific prompting. We use a 70/15/15 stratified split (21,000 train / 4,500 validation / 4,500 test) with a fixed random seed for reproducibility.
+
+\paragraph{SciFact.} SciFact~\citep{wadden2020fact} is a biomedical claim verification dataset containing 1,109 scientific claims paired with evidence from a corpus of 5,183 abstracts. We extract 693 labeled (claim, evidence) pairs and apply a stratified 70/15/15 split (484 train / 103 validation / 106 test). Labels are binarized: SUPPORT $\rightarrow$ faithful (0), CONTRADICT $\rightarrow$ hallucinated (1).
+
+\subsection{Baselines}
+
+We compare against three baselines. (1) \textbf{Zero-shot DeBERTa-v3}: the pre-trained model without fine-tuning, evaluating off-the-shelf NLI transfer. (2) \textbf{Standard inference}: single-pass DeBERTa without MC Dropout or calibration, isolating the contribution of uncertainty quantification. (3) \textbf{Context ablation}: the fine-tuned model evaluated on inputs stripped of the knowledge context $K$, retaining only $[Q; R]$.
+
+\subsection{Metrics}
+
+We report Accuracy, F1-score, and AUROC. \textbf{Accuracy} measures overall classification correctness. \textbf{F1-score} is the harmonic mean of precision and recall, important because hallucinated samples in HaluEval are balanced but real-world distributions are skewed. \textbf{AUROC} (Area Under the Receiver Operating Characteristic Curve) evaluates ranking quality across all thresholds, capturing how well the model separates classes independently of a fixed decision boundary.
+
+
+\section{Results}
+
+\subsection{HaluEval Detection Performance}
+
+Table~\ref{tab:main_results} presents the main detection results. The fine-tuned DeBERTa achieves strong overall performance with F1=0.915 and AUROC=0.977. MC Dropout inference provides the best accuracy (93.2\%) and F1 (0.931) by averaging 20 stochastic forward passes, demonstrating that the uncertainty signal improves prediction quality.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Method} & \textbf{Acc} & \textbf{F1} & \textbf{AUROC} \\
+\midrule
+Zero-shot DeBERTa & 0.500 & 0.430 & 0.650 \\
+Fine-tuned DeBERTa & 0.913 & 0.915 & 0.977 \\
+MC Dropout mean & \textbf{0.932} & \textbf{0.931} & \textbf{0.978} \\
+Calibrated DeBERTa & 0.913 & 0.915 & 0.977 \\
+Simple Average & 0.920 & 0.921 & 0.979 \\
+LR Meta-Classifier & 0.931 & 0.930 & 0.960 \\
+\bottomrule
+\end{tabular}
+\caption{Detection performance on HaluEval test set (4,500 samples). MC Dropout achieves the best accuracy and F1.}
+\label{tab:main_results}
+\end{table}
+
+The LR meta-classifier, which combines DeBERTa probability, MC Dropout mean, MC uncertainty, and retrieval similarity into a logistic regression, matches MC Dropout on accuracy but loses AUROC (0.960 vs. 0.978). This occurs because the retrieval similarity signal alone achieves only AUROC $\approx$ 0.38---dense retrieval does not reliably separate faithful from hallucinated text---and including it as a feature introduces noise into the probability calibration.
+
+\paragraph{Per-Task Analysis.} Table~\ref{tab:per_task} shows that QA is easiest (F1=0.97) due to strong lexical overlap between questions and factoid answers. Summarization performance is also strong (F1=0.96). Dialogue is most challenging (F1=0.82) because conversational responses are shorter, more implicit, and contain fewer lexical cues from the knowledge source.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Task} & \textbf{Acc} & \textbf{F1} & \textbf{AUROC} \\
+\midrule
+QA & 0.967 & 0.970 & 0.996 \\
+Summarization & 0.940 & 0.960 & 0.988 \\
+Dialogue & 0.830 & 0.820 & 0.944 \\
+\midrule
+Overall & 0.913 & 0.915 & 0.977 \\
+\bottomrule
+\end{tabular}
+\caption{Per-task detection performance on HaluEval.}
+\label{tab:per_task}
+\end{table}
+
+
+\subsection{Context Ablation}
+
+To determine whether the model performs genuine entailment reasoning or exploits surface-level shortcuts, we strip the knowledge context from all test inputs and re-evaluate. Figure~\ref{fig:context} shows the results.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\columnwidth]{context_ablation.png}
+\caption{F1 with and without knowledge context across tasks. Summarization depends most on context ($-$24\%).}
+\label{fig:context}
+\end{figure}
+
+Overall F1 drops from 0.91 to 0.82 without context, confirming the model leverages the knowledge source. The effect is task-dependent: Summarization F1 drops 24\% (0.96 $\rightarrow$ 0.73), indicating that detecting hallucinated summaries requires comparing against the source document. QA F1 drops only 1\% (0.97 $\rightarrow$ 0.96), suggesting that factoid QA hallucinations are often detectable from the question-answer pair alone, likely because hallucinated answers contain implausible entity substitutions or numerical inconsistencies.
+
+
+\subsection{Learning Curves}
+
+We train DeBERTa from scratch on 10\%, 25\%, 50\%, and 100\% of HaluEval training data to characterize data efficiency (Figure~\ref{fig:learning}).
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\columnwidth]{learning_curve.png}
+\caption{Learning curves: F1 and all metrics vs. training set size. A sharp elbow at 5K examples captures most of the signal.}
+\label{fig:learning}
+\end{figure}
+
+At 10\% (2.1K examples), the model fails completely (F1=0.01), unable to distinguish the classes. At 25\% (5.3K), F1 jumps to 0.70---a sharp elbow indicating that approximately 5K labeled examples are sufficient to learn the core discrimination signal. Performance continues improving to 0.82 at 50\% and 0.95 at 100\%, but with diminishing returns. This analysis is practically important: it suggests that bootstrapping a detector for a new domain requires only $\sim$5K labeled examples to achieve usable performance.
+
+\subsection{DPO Hallucination Mitigation}
+
+Table~\ref{tab:dpo} summarizes the DPO experiment. The base Qwen2.5-0.5B-Instruct model produces hallucinated responses for 85.5\% of held-out test prompts, as scored by our DeBERTa detector. After DPO training on 21K preference pairs, the hallucination rate drops to 37.7\%---a 55.9\% relative reduction.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Model} & \textbf{Hall. Rate} & \textbf{Mean $P$(hall)} \\
+\midrule
+Base (Qwen2.5-0.5B) & 0.855 & 0.816 \\
+DPO-trained & 0.377 & 0.293 \\
+\midrule
+Absolute reduction & $-$0.477 & $-$0.523 \\
+Relative reduction & 55.9\% & 64.1\% \\
+\bottomrule
+\end{tabular}
+\caption{DPO hallucination reduction on 4,500 held-out test generations. Our DeBERTa detector evaluates both base and DPO generations.}
+\label{tab:dpo}
+\end{table}
+
+The probability distribution shifts substantially: the base model concentrates near $P(\text{hall})=1.0$ while the DPO model shifts mass toward $P(\text{hall})=0$. This demonstrates that preference optimization can align a small generator toward more faithful responses, and that our detector provides a useful evaluation signal in a detector-in-the-loop paradigm.
+
+
+\subsection{Cross-Domain: SciFact}
+
+Applying the HaluEval-trained DeBERTa to SciFact biomedical claims yields F1=0.517 and AUROC=0.515, barely above chance. The model predicts nearly all scientific claims as hallucinated because the distributional properties of biomedical claim-evidence pairs differ substantially from HaluEval's ChatGPT-generated responses.
+
+To address this, we evaluate three domain-specific fine-tuning configurations on 484 SciFact training examples. Table~\ref{tab:scifact} presents the results.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}llccc@{}}
+\toprule
+\textbf{Config} & \textbf{Base Model} & \textbf{Acc} & \textbf{F1} & \textbf{AUROC} \\
+\midrule
+Zero-shot & HaluEval-DeBERTa & 0.349 & 0.517 & 0.515 \\
+A & DeBERTa-v3 & 0.604 & 0.488 & 0.582 \\
+\textbf{B} & \textbf{PubMedBERT} & \textbf{0.764} & \textbf{0.627} & \textbf{0.808} \\
+C & HaluEval$\rightarrow$SciFact & 0.472 & 0.533 & 0.610 \\
+\bottomrule
+\end{tabular}
+\caption{Domain-specific fine-tuning on SciFact (106 test examples). Config B: PubMedBERT~\citep{gu2021domain} fine-tuned on SciFact training data.}
+\label{tab:scifact}
+\end{table}
+
+PubMedBERT (Config B) achieves the strongest results with F1=0.627 and AUROC=0.808, demonstrating that domain-matched pre-training provides the largest benefit for biomedical claim verification. Config C (HaluEval$\rightarrow$SciFact transfer) outperforms zero-shot on AUROC (0.610 vs. 0.515), indicating that general-domain NLI pre-training provides useful initialization even for out-of-domain scientific claims. Notably, Config A (DeBERTa fine-tuned on SciFact alone) achieves higher accuracy than zero-shot (0.604 vs. 0.349) but lower F1 (0.488 vs. 0.517), because it learns a more conservative threshold but lacks both the domain-specific vocabulary of PubMedBERT and the NLI priors from HaluEval. All configurations remain below 0.7 F1, reflecting the inherent difficulty of biomedical claim verification with only 484 training examples.
+
+
+\section{Conclusion}
+
+We presented a multi-signal hallucination detection pipeline achieving F1=0.915 on HaluEval, with MC Dropout improving accuracy to 93.2\%. Ablation studies revealed that the model genuinely leverages knowledge context, with task-dependent effects: summarization relies heavily on context while QA detection is more self-contained. Learning curves showed that $\sim$5K examples suffice for usable detection performance. DPO training reduced generator hallucination rates by 55.9\%, validating detector-in-the-loop evaluation. Cross-domain evaluation on SciFact confirmed the need for domain-specific adaptation: PubMedBERT fine-tuning achieved AUROC=0.808, demonstrating that domain-matched pre-training is the strongest strategy for bridging the domain gap.
+
+Future work includes span-level hallucination localization, scaling DPO to larger generators, and evaluating domain adaptation across additional specialized domains such as legal and financial text.
+
+\bibliography{custom}
+
+\end{document}
