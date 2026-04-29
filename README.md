@@ -2,7 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![HuggingFace Model](https://img.shields.io/badge/🤗-Model-yellow)](https://huggingface.co/varunchundru/hallucination-detector-deberta)
+[![HuggingFace Model](https://img.shields.io/badge/🤗-Detector-yellow)](https://huggingface.co/varunchundru/hallucination-detector-deberta)
+[![HuggingFace Model](https://img.shields.io/badge/🤗-DPO_Generator-orange)](https://huggingface.co/varunchundru/dpo-qwen2.5-0.5b-halueval)
 
 **CS 593 NLP Final Project | Purdue University | Spring 2026**
 
